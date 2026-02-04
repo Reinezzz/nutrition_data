@@ -32,11 +32,11 @@ jobs:
         env:
           AIRTABLE_TOKEN: ${{ secrets.AIRTABLE_TOKEN }}
           AIRTABLE_BASE_ID: ${{ secrets.AIRTABLE_BASE_ID }}
-          AIRTABLE_DAILYLOG_TABLE: DailyLog
-          AIRTABLE_MEALS_TABLE: Meals
-          AIRTABLE_RUN_TABLE: ExportRun
-          AIRTABLE_DAILYLOG_VIEW: Export_DailyLog
-          AIRTABLE_MEALS_VIEW: Export_Meals
+          AIRTABLE_DAILYLOG_TABLE: ${{ vars.AIRTABLE_DAILYLOG_TABLE }}
+          AIRTABLE_MEALS_TABLE: ${{ vars.AIRTABLE_MEALS_TABLE }}
+          AIRTABLE_RUN_TABLE: ${{ vars.AIRTABLE_RUN_TABLE}}
+          AIRTABLE_DAILYLOG_VIEW: ${{ vars.AIRTABLE_DAILYLOG_VIEW }}
+          AIRTABLE_MEALS_VIEW: ${{ vars.AIRTABLE_MEALS_VIEW}}
         run: |
           python scripts/archive_cycle.py
 
