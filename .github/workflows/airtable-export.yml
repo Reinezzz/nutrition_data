@@ -46,8 +46,8 @@ jobs:
         run: |
           set -e
           BATCH="$(date -u +%Y-%m)"
-          python tools/build_report_html.py \
-            --dailylog "exports/${BATCH}/dailylog.csv" \
+          python scripts/build_report_html.py \
+            --dailylog "data_dumps/${BATCH}/dailylog_dump.csv" \
             --meals   "exports/${BATCH}/meals.csv" \
             --out     "exports/${BATCH}/report.html"
 
