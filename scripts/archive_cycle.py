@@ -167,26 +167,26 @@ def create_export_run(
     daily_file_path: str,
     meals_file_path: str,
 ) -> str:
-    url = f"{API_BASE}/{TABLE_RUNS}"
-    fields: Dict[str, Any] = {
-        RUN_FIELD_RUNID: run_tag,
-        RUN_FIELD_STATUS: "Exported",
-        RUN_FIELD_EXECUTED_AT: datetime.utcnow().isoformat() + "Z",
-        RUN_FIELD_DL_COUNT: daily_count,
-        RUN_FIELD_MEALS_COUNT: meals_count,
-    }
-    if cutoff_date:
-        fields[RUN_FIELD_CUTOFF] = cutoff_date
+    url = f"{API_BASE}/ExportRun"
 
-    # сохраняем относительные пути в репозитории
-    if RUN_FIELD_DL_FILE:
-        fields[RUN_FIELD_DL_FILE] = daily_file_path
-    if RUN_FIELD_MEALS_FILE:
-        fields[RUN_FIELD_MEALS_FILE] = meals_file_path
+    fields = {
+        "RunID": run_tag,                     # primary
+        "Status": "Exported",                 # single select (точно как в Airtable)
+        "ExecutedAt": datetime.utcnow().isoformat(),
+        "DailyLogCount": daily_count,
+        "MealsCount": meals_count,
+        "DailyLogfile": daily_file_path,      # Text
+        "MealsFile": meals_file_path,          # Text
+    }
+
+    if cutoff_date:
+        fields["CutoffDate"] = cutoff_date
 
     payload = {"fields": fields}
+
     resp = _request_with_backoff("POST", url, json=payload)
     return resp.json()["id"]
+
 
 def patch_records_archived(table: str, record_ids: List[str], run_record_id: str, run_tag: str) -> None:
     if not record_ids:
