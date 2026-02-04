@@ -4,9 +4,10 @@
 """
 Monthly archive cycle script:
 1) Fetch candidates from Airtable views (minimal GET requests, pageSize=100, fields[] limited)
-2) Save CSV dumps:
-   - dump_<MM:YYYY>/DailyLog_dump_<MM:YYYY>.csv
-   - dump_<MM:YYYY>/Meals_dump_<MM:YYYY>.csv
+2) Save CSV dumps into:
+   data_dumps/dump_<MM:YYYY>/
+     - DailyLog_dump_<MM:YYYY>.csv
+     - Meals_dump_<MM:YYYY>.csv
 3) Create ExportRun record
 4) Mark exported records as Archived in DailyLog and Meals (PATCH batches of 10)
 """
@@ -17,7 +18,7 @@ import sys
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional
 
 import requests
 
@@ -28,7 +29,7 @@ AIRTABLE_BASE_ID = os.environ["AIRTABLE_BASE_ID"]
 API_BASE = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}"
 HEADERS = {"Authorization": f"Bearer {AIRTABLE_TOKEN}", "Content-Type": "application/json"}
 
-# Tables / Views (override via env if needed)
+# Tables / Views
 TABLE_DAILYLOG = os.environ.get("AIRTABLE_DAILYLOG_TABLE", "DailyLog")
 TABLE_MEALS = os.environ.get("AIRTABLE_MEALS_TABLE", "Meals")
 TABLE_RUNS = os.environ.get("AIRTABLE_RUN_TABLE", "ExportRun")
@@ -37,7 +38,7 @@ VIEW_DAILYLOG = os.environ.get("AIRTABLE_DAILYLOG_VIEW", "Export_DailyLog")
 VIEW_MEALS = os.environ.get("AIRTABLE_MEALS_VIEW", "Export_Meals")
 
 # ExportRun field names (override if your schema differs)
-RUN_FIELD_RUNID = os.environ.get("RUN_FIELD_RUNID", "RunId")               # primary
+RUN_FIELD_RUNID = os.environ.get("RUN_FIELD_RUNID", "RunId")  # primary
 RUN_FIELD_STATUS = os.environ.get("RUN_FIELD_STATUS", "Status")
 RUN_FIELD_EXECUTED_AT = os.environ.get("RUN_FIELD_EXECUTED_AT", "ExecutedAt")
 RUN_FIELD_CUTOFF = os.environ.get("RUN_FIELD_CUTOFF", "CutoffDate")
@@ -46,7 +47,7 @@ RUN_FIELD_MEALS_COUNT = os.environ.get("RUN_FIELD_MEALS_COUNT", "MealsCount")
 RUN_FIELD_DL_FILE = os.environ.get("RUN_FIELD_DL_FILE", "DailyLogFile")
 RUN_FIELD_MEALS_FILE = os.environ.get("RUN_FIELD_MEALS_FILE", "MealsFile")
 
-# Archived field names in fact tables (override if differs)
+# Archived field names in fact tables
 FIELD_ARCHIVED = os.environ.get("FIELD_ARCHIVED", "Archived")
 FIELD_ARCHIVED_AT = os.environ.get("FIELD_ARCHIVED_AT", "ArchivedAt")
 FIELD_ARCHIVE_BATCH = os.environ.get("FIELD_ARCHIVE_BATCH", "ArchiveBatch")
@@ -55,10 +56,9 @@ FIELD_EXPORT_RUN_LINK = os.environ.get("FIELD_EXPORT_RUN_LINK", "ExportRun")
 # Airtable limits
 PAGE_SIZE = 100
 PATCH_BATCH = 10
-MIN_SLEEP = 0.25  # ~4 req/sec conservative
+MIN_SLEEP = 0.25  # ~4 req/sec
 
 # ---------------- EXPORT FIELDS ----------------
-# IMPORTANT: must match exactly Airtable field names
 DAILYLOG_FIELDS = [
     "Вес утром",
     "Вес вечером",
@@ -88,18 +88,17 @@ MEALS_FIELDS = [
     "Описание",
 ]
 
-# ---------------- NAMING ----------------
-def mm_colon_yyyy(dt: datetime) -> str:
-    # "02:2026"
-    return dt.strftime("%m:%Y")
+# ---------------- PATHS & NAMING ----------------
+def tag_mm_colon_yyyy(dt: datetime) -> str:
+    return dt.strftime("%m:%Y")  # "02:2026"
 
-def dump_folder_name(tag: str) -> str:
-    return f"dump_{tag}"
+def dump_dir_for(tag: str) -> Path:
+    return Path("data_dumps") / f"dump_{tag}"
 
-def dailylog_file_name(tag: str) -> str:
+def dailylog_file_for(tag: str) -> str:
     return f"DailyLog_dump_{tag}.csv"
 
-def meals_file_name(tag: str) -> str:
+def meals_file_for(tag: str) -> str:
     return f"Meals_dump_{tag}.csv"
 
 # ---------------- HELPERS ----------------
@@ -107,7 +106,6 @@ def _sleep():
     time.sleep(MIN_SLEEP)
 
 def _normalize_cell(v: Any) -> Any:
-    # Airtable может вернуть list для lookup/link. Делаем плоско и читаемо.
     if isinstance(v, list):
         return "; ".join(str(x) for x in v)
     if isinstance(v, dict):
@@ -115,7 +113,7 @@ def _normalize_cell(v: Any) -> Any:
     return v
 
 def _request_with_backoff(method: str, url: str, **kwargs) -> requests.Response:
-    for attempt in range(8):
+    for _ in range(8):
         _sleep()
         resp = requests.request(method, url, headers=HEADERS, timeout=60, **kwargs)
         if resp.status_code != 429:
@@ -127,20 +125,13 @@ def _request_with_backoff(method: str, url: str, **kwargs) -> requests.Response:
     return resp
 
 def fetch_records(table: str, view: str, fields: List[str]) -> List[Dict[str, Any]]:
-    """
-    Fetch records from a view with pagination.
-    Uses:
-      - pageSize=100
-      - fields[]=... to reduce payload
-    Returns records with 'id' and 'fields'.
-    """
     url = f"{API_BASE}/{table}"
     out: List[Dict[str, Any]] = []
     offset: Optional[str] = None
 
     while True:
         params: Dict[str, Any] = {"view": view, "pageSize": PAGE_SIZE}
-        params["fields[]"] = fields  # limit returned fields (record id still included)
+        params["fields[]"] = fields
         if offset:
             params["offset"] = offset
 
@@ -155,7 +146,6 @@ def fetch_records(table: str, view: str, fields: List[str]) -> List[Dict[str, An
     return out
 
 def write_csv_utf8sig(path: Path, fields: List[str], records: List[Dict[str, Any]]) -> None:
-    # utf-8-sig for Excel friendliness
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", newline="", encoding="utf-8-sig") as f:
         w = csv.writer(f)
@@ -177,10 +167,6 @@ def create_export_run(
     daily_file_path: str,
     meals_file_path: str,
 ) -> str:
-    """
-    Create ExportRun record. Returns created record id.
-    Field names are configurable via env.
-    """
     url = f"{API_BASE}/{TABLE_RUNS}"
     fields: Dict[str, Any] = {
         RUN_FIELD_RUNID: run_tag,
@@ -192,7 +178,7 @@ def create_export_run(
     if cutoff_date:
         fields[RUN_FIELD_CUTOFF] = cutoff_date
 
-    # Links/paths: store relative paths in repo (works for audit)
+    # сохраняем относительные пути в репозитории
     if RUN_FIELD_DL_FILE:
         fields[RUN_FIELD_DL_FILE] = daily_file_path
     if RUN_FIELD_MEALS_FILE:
@@ -203,9 +189,6 @@ def create_export_run(
     return resp.json()["id"]
 
 def patch_records_archived(table: str, record_ids: List[str], run_record_id: str, run_tag: str) -> None:
-    """
-    Mark records as archived (PATCH in batches of 10).
-    """
     if not record_ids:
         return
 
@@ -229,34 +212,29 @@ def patch_records_archived(table: str, record_ids: List[str], run_record_id: str
         }
         _request_with_backoff("PATCH", url, json=payload)
 
-def infer_cutoff_date(dl_records: List[Dict[str, Any]]) -> Optional[str]:
-    """
-    If you have CutoffDate lookup included in DailyLog export view/fields, you can store it in ExportRun.
-    Example:
-      - add "CutoffDate" to DAILYLOG_FIELDS and return it from first record.
-    For now: None (keeps script independent).
-    """
+def infer_cutoff_date(_: List[Dict[str, Any]]) -> Optional[str]:
+    # если хочешь — добавь CutoffDate lookup в view/fields и верни его из первой записи
     return None
 
 # ---------------- MAIN ----------------
 def main():
     now = datetime.utcnow()
-    tag = mm_colon_yyyy(now)  # "MM:YYYY"
+    tag = tag_mm_colon_yyyy(now)  # "MM:YYYY"
     run_tag = tag
 
-    dump_dir = Path("exports") / dump_folder_name(tag)
-    dl_path = dump_dir / dailylog_file_name(tag)
-    meals_path = dump_dir / meals_file_name(tag)
+    dump_dir = dump_dir_for(tag)
+    dl_path = dump_dir / dailylog_file_for(tag)
+    meals_path = dump_dir / meals_file_for(tag)
 
     print(f"Run tag: {run_tag}")
     print(f"Dump dir: {dump_dir}")
 
     # 1) Fetch candidates
-    print(f"Fetching DailyLog candidates: table={TABLE_DAILYLOG}, view={VIEW_DAILYLOG}")
+    print(f"Fetching DailyLog: table={TABLE_DAILYLOG}, view={VIEW_DAILYLOG}")
     dl = fetch_records(TABLE_DAILYLOG, VIEW_DAILYLOG, DAILYLOG_FIELDS)
     print(f"DailyLog records: {len(dl)}")
 
-    print(f"Fetching Meals candidates: table={TABLE_MEALS}, view={VIEW_MEALS}")
+    print(f"Fetching Meals: table={TABLE_MEALS}, view={VIEW_MEALS}")
     ml = fetch_records(TABLE_MEALS, VIEW_MEALS, MEALS_FIELDS)
     print(f"Meals records: {len(ml)}")
 
@@ -277,7 +255,7 @@ def main():
     )
     print(f"Created ExportRun record id: {run_record_id}")
 
-    # 4) Mark Archived in Airtable (batches of 10)
+    # 4) Mark Archived
     dl_ids = [r["id"] for r in dl]
     ml_ids = [r["id"] for r in ml]
 

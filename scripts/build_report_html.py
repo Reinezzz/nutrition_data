@@ -8,46 +8,13 @@ from typing import Dict, List, Any
 from html import escape
 from datetime import datetime
 
-DAILYLOG_FIELDS = [
-    "День питания",
-    "Дата",
-    "Вес утром",
-    "Вес вечером",
-    "Средний вес за день",
-    "Калории приема пищи",
-    "Белки приема пищи",
-    "Жиры приема пищи",
-    "Углеводы приема пищи",
-    "Цель по калориям",
-    "Цель по белкам",
-    "Цель по жирам",
-    "Цель по углеводам",
-    "Описание",
-]
-
-MEALS_FIELDS = [
-    "Тип приема пищи",
-    "Дата и время",
-    "Вид приема пищи",
-    "Калории приема пищи",
-    "Белки приема пищи",
-    "Жиры приема пищи",
-    "Углеводы приема пищи",
-    "DayKey",
-    "DayDate",
-    "Описание",
-]
-
-
 def fmt_date_ddmmyyyy(s: str) -> str:
     if not s:
         return ""
     try:
         return datetime.strptime(s, "%Y-%m-%d").strftime("%d.%m.%Y")
     except ValueError:
-        # если в реальных данных формат окажется другим — просто возвращаем как есть
         return s
-
 
 def fmt_dt_ddmmyyyy(s: str) -> str:
     if not s:
@@ -57,23 +24,18 @@ def fmt_dt_ddmmyyyy(s: str) -> str:
     except ValueError:
         return s
 
-
 def read_csv(path: Path) -> List[dict]:
-    # поддержка BOM (utf-8-sig) и обычного utf-8
     with path.open("r", encoding="utf-8-sig", newline="") as f:
         return list(csv.DictReader(f))
-
 
 def num(v: Any) -> str:
     if v is None:
         return ""
     return str(v).strip()
 
-
 def esc(v: Any) -> str:
     s = "" if v is None else str(v)
     return escape(s)
-
 
 def kcal_badge(fact: str, target: str) -> str:
     try:
@@ -90,11 +52,9 @@ def kcal_badge(fact: str, target: str) -> str:
     except Exception:
         return "badge"
 
-
 def render_day_block(day: dict, meals: List[dict]) -> str:
     dk = esc(day.get("День питания", ""))
 
-    # Дата в dd.mm.yyyy
     raw_day_date = (day.get("Дата", "") or "").strip()
     day_date = fmt_date_ddmmyyyy(raw_day_date)
 
@@ -175,9 +135,9 @@ def render_day_block(day: dict, meals: List[dict]) -> str:
 
             html.append('<div class="meal-grid">')
             html.append(f'<div class="pill">Ккал: {esc(m.get("Калории приема пищи",""))}</div>')
-            html.append(f'<div class="pill">Б: {esc(fmt_g(m.get("Белки приема пищи","")))}</div>')
-            html.append(f'<div class="pill">Ж: {esc(fmt_g(m.get("Жиры приема пищи","")))}</div>')
-            html.append(f'<div class="pill">У: {esc(fmt_g(m.get("Углеводы приема пищи","")))}</div>')
+            html.append(f'<div class="pill">Б: {esc((num(m.get("Белки приема пищи","")) + " г") if num(m.get("Белки приема пищи","")) else "")}</div>')
+            html.append(f'<div class="pill">Ж: {esc((num(m.get("Жиры приема пищи","")) + " г") if num(m.get("Жиры приема пищи","")) else "")}</div>')
+            html.append(f'<div class="pill">У: {esc((num(m.get("Углеводы приема пищи","")) + " г") if num(m.get("Углеводы приема пищи","")) else "")}</div>')
             html.append('</div>')  # meal-grid
 
             mnote = m.get("Описание", "") or ""
@@ -189,10 +149,8 @@ def render_day_block(day: dict, meals: List[dict]) -> str:
     html.append("</section>")
     return "\n".join(html)
 
-
 def chunk(lst: List[Any], size: int) -> List[List[Any]]:
     return [lst[i:i + size] for i in range(0, len(lst), size)]
-
 
 def build_html(daily_csv: Path, meals_csv: Path, out_html: Path):
     days = read_csv(daily_csv)
@@ -204,20 +162,21 @@ def build_html(daily_csv: Path, meals_csv: Path, out_html: Path):
         if dk:
             by_day[dk].append(m)
 
-    # сортировка meals внутри дня по времени (ISO-сортировка остаётся корректной)
     for dk, arr in by_day.items():
         arr.sort(key=lambda x: (x.get("Дата и время") or ""))
 
-    # сортировка дней по дате
     days.sort(key=lambda d: (d.get("Дата") or "", d.get("День питания") or ""))
 
-    pages = chunk(days, 2)  # 2 блока на страницу
+    pages = chunk(days, 2)
 
     doc = []
     doc.append("<!doctype html>")
     doc.append("<meta charset='utf-8'>")
     doc.append("<meta name='viewport' content='width=device-width, initial-scale=1'>")
-    doc.append('<link rel="stylesheet" href="styles.css">')
+
+    # ВАЖНО: report лежит в data_dumps/dump_<tag>/, стили в data_dumps/styles.css
+    doc.append('<link rel="stylesheet" href="../styles.css">')
+
     doc.append("<title>Export report</title>")
     doc.append("<body><div class='container'>")
     doc.append("<div class='header'>")
@@ -230,20 +189,18 @@ def build_html(daily_csv: Path, meals_csv: Path, out_html: Path):
         for day in page:
             dk = (day.get("День питания") or "").strip()
             doc.append(render_day_block(day, by_day.get(dk, [])))
-        doc.append("</div>")  # page
+        doc.append("</div>")
 
     doc.append("</div></body>")
     out_html.parent.mkdir(parents=True, exist_ok=True)
     out_html.write_text("\n".join(doc), encoding="utf-8")
 
-
 if __name__ == "__main__":
     import argparse
-
     p = argparse.ArgumentParser()
-    p.add_argument("--dailylog", required=True, help="Path to dailylog.csv")
-    p.add_argument("--meals", required=True, help="Path to meals.csv")
-    p.add_argument("--out", required=True, help="Output html path")
+    p.add_argument("--dailylog", required=True)
+    p.add_argument("--meals", required=True)
+    p.add_argument("--out", required=True)
     args = p.parse_args()
 
     build_html(Path(args.dailylog), Path(args.meals), Path(args.out))
