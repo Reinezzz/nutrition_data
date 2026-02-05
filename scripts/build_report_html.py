@@ -19,9 +19,15 @@ def fmt_date_ddmmyyyy(s: str) -> str:
 def fmt_dt_ddmmyyyy(s: str) -> str:
     if not s:
         return ""
+    s = s.strip()
     try:
+        # 2025-09-26T08:30:00.000Z
+        if "T" in s:
+            dt = datetime.fromisoformat(s.replace("Z", "+00:00"))
+            return dt.astimezone(timezone.utc).strftime("%d.%m.%Y %H:%M")
+        # fallback старый формат
         return datetime.strptime(s, "%Y-%m-%d %H:%M").strftime("%d.%m.%Y %H:%M")
-    except ValueError:
+    except Exception:
         return s
 
 def read_csv(path: Path) -> List[dict]:
@@ -152,17 +158,25 @@ def render_day_block(day: dict, meals: List[dict]) -> str:
 def chunk(lst: List[Any], size: int) -> List[List[Any]]:
     return [lst[i:i + size] for i in range(0, len(lst), size)]
 
+def day_id_from_day(day: dict) -> str:
+    # DailyLog: "Дата" обычно YYYY-MM-DD
+    return (day.get("DayDate") or day.get("Дата") or "").strip()[:10]
+
+def day_id_from_meal(m: dict) -> str:
+    # Meals: есть DayDate; если нет — возьмём первые 10 символов из ISO datetime
+    return (m.get("DayDate") or (m.get("Дата и время") or "")[:10] or "").strip()[:10]
+
 def build_html(daily_csv: Path, meals_csv: Path, out_html: Path):
     days = read_csv(daily_csv)
     meals = read_csv(meals_csv)
 
     by_day: Dict[str, List[dict]] = defaultdict(list)
     for m in meals:
-        dk = (m.get("DayKey") or "").strip()
-        if dk:
-            by_day[dk].append(m)
+        did = day_id_from_meal(m)
+        if did:
+            by_day[did].append(m)
 
-    for dk, arr in by_day.items():
+    for did, arr in by_day.items():
         arr.sort(key=lambda x: (x.get("Дата и время") or ""))
 
     days.sort(key=lambda d: (d.get("Дата") or "", d.get("День питания") or ""))
@@ -187,8 +201,8 @@ def build_html(daily_csv: Path, meals_csv: Path, out_html: Path):
     for page in pages:
         doc.append("<div class='page'>")
         for day in page:
-            dk = (day.get("День питания") or "").strip()
-            doc.append(render_day_block(day, by_day.get(dk, [])))
+            did = day_id_from_day(day)
+            doc.append(render_day_block(day, by_day.get(did, [])))
         doc.append("</div>")
 
     doc.append("</div></body>")
